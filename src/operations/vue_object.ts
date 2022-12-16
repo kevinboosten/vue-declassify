@@ -1,287 +1,232 @@
-import * as ts from 'ts-morph'
-import * as vue_class from './vue_class'
-import * as imports from './imports'
+import * as ts from "ts-morph";
+import * as imports from "./imports";
+import * as vue_class from "./vue_class";
 
-type PostprocessCallback = (source: ts.SourceFile) => void
+type PostprocessCallback = (source: ts.SourceFile) => void;
 
 const LIFECYCLE_HOOKS = Object.freeze([
-  'beforeCreate',
-  'created',
-  'beforeMount',
-  'mounted',
-  'beforeUpdate',
-  'updated',
-  'beforeDestroy',
-  'destroyed',
-])
+  "beforeCreate",
+  "created",
+  "beforeMount",
+  "mounted",
+  "beforeUpdate",
+  "updated",
+  "beforeDestroy",
+  "destroyed",
+]);
 
-function writeDocs(
-  writer: ts.CodeBlockWriter,
-  docs: ts.JSDoc[],
-) {
+function writeDocs(writer: ts.CodeBlockWriter, docs: ts.JSDoc[]) {
   for (const doc of docs) {
-    writer.writeLine('/**')
+    writer.writeLine("/**");
 
-    for (const line of doc.getInnerText().split('\n')) {
-      writer
-        .write(' *')
-        .conditionalWrite(!!line.trim(), ' ')
-        .write(line)
-        .newLine()
+    for (const line of doc.getInnerText().split("\n")) {
+      writer.write(" *").conditionalWrite(!!line.trim(), " ").write(line).newLine();
     }
 
-    writer.writeLine(' */')
+    writer.writeLine(" */");
   }
 }
 
-function writeName(
-  writer: ts.CodeBlockWriter,
-  declaration: ts.ClassDeclaration,
-) {
-  writer
-    .write('name:')
-    .space()
-    .quote()
-      .write(declaration.getNameOrThrow())
-    .quote()
-    .write(',')
-    .newLine()
+function writeName(writer: ts.CodeBlockWriter, declaration: ts.ClassDeclaration) {
+  writer.write("name:").space().quote().write(declaration.getNameOrThrow()).quote().write(",").newLine();
 }
 
 function writeConfig(
   writer: ts.CodeBlockWriter,
   decorator: {
-    properties: ts.ObjectLiteralElementLike[]
+    properties: ts.ObjectLiteralElementLike[];
   }
 ) {
   if (decorator.properties.length > 0) {
     for (const property of decorator.properties) {
-      writer.write(property.getText())
+      writer.write(property.getText());
     }
 
-    writer
-      .write(',')
-      .newLine()
+    writer.write(",").newLine();
   }
 }
 
 function writeProps(
-  writer: ts.CodeBlockWriter, 
+  writer: ts.CodeBlockWriter,
   props: {
-    declaration: ts.PropertyDeclaration
-    required?: ts.PropertyAssignment
-    default?: ts.PropertyAssignment
+    declaration: ts.PropertyDeclaration;
+    required?: ts.PropertyAssignment;
+    default?: ts.PropertyAssignment;
   }[]
 ): PostprocessCallback[] {
-  const callbacks: PostprocessCallback[] = []
+  const callbacks: PostprocessCallback[] = [];
 
   if (props.length > 0) {
     writer
-      .write('props:')
+      .write("props:")
       .space()
-      .write('{')
+      .write("{")
       .newLine()
       .withIndentationLevel(1, () => {
         for (let prop of props) {
-          callbacks.push(...writeProp(writer, prop))
+          callbacks.push(...writeProp(writer, prop));
         }
       })
-      .writeLine('},')
+      .writeLine("},");
   }
 
-  return callbacks
+  return callbacks;
 }
 
 function writeProp(
   writer: ts.CodeBlockWriter,
   prop: {
-    declaration: ts.PropertyDeclaration
-    required?: ts.PropertyAssignment
-    default?: ts.PropertyAssignment
+    declaration: ts.PropertyDeclaration;
+    required?: ts.PropertyAssignment;
+    default?: ts.PropertyAssignment;
   }
 ): PostprocessCallback[] {
-  const callbacks: PostprocessCallback[] = []
-  writeDocs(writer, prop.declaration.getJsDocs())
+  const callbacks: PostprocessCallback[] = [];
+  writeDocs(writer, prop.declaration.getJsDocs());
 
   writer
     .write(`${prop.declaration.getName()}:`)
     .space()
-    .write('{')
+    .write("{")
     .withIndentationLevel(1, () => {
-      callbacks.push(...writePropType(writer, prop.declaration))
-      writePropOptions(writer, prop)
+      callbacks.push(...writePropType(writer, prop.declaration));
+      writePropOptions(writer, prop);
     })
-    .writeLine('},')
+    .writeLine("},");
 
-  return callbacks
+  return callbacks;
 }
 
-function writePropType(
-  writer: ts.CodeBlockWriter,
-  declaration: ts.PropertyDeclaration
-): PostprocessCallback[] {
-  const callbacks: PostprocessCallback[] = []
-  const type = declaration.getType()
-  writer.write('type: ')
+function writePropType(writer: ts.CodeBlockWriter, declaration: ts.PropertyDeclaration): PostprocessCallback[] {
+  const callbacks: PostprocessCallback[] = [];
+  const type = declaration.getType();
+  writer.write("type: ");
 
   if (type.isString()) {
-    writer.write('String')
-  
+    writer.write("String");
   } else if (type.isNumber()) {
-    writer.write('Number')
-
+    writer.write("Number");
   } else if (type.isBoolean()) {
-    writer.write('Boolean')
-  
+    writer.write("Boolean");
   } else {
-    const actualType = declaration.getTypeNodeOrThrow().getText()
+    const actualType = declaration.getTypeNodeOrThrow().getText();
 
     // Vue.js props can only be primitive types, unless you use PropType.
     // However, even when using PropType, the base annotated type must be
     // the same type as the annotated one, or you get type errors anyway.
-    let baseType: 'Object' | 'Function' | 'Array'
+    let baseType: "Object" | "Function" | "Array";
 
     // HACK: Adjust Object/Function/Array based on what the type seems to be.
     // This heuristic can be improved drastically, and is part of what makes
-    // a project like vue-declassify difficult. 
-  
-    if (type.getCallSignatures().length > 0) {
+    // a project like vue-declassify difficult.
 
+    if (type.getCallSignatures().length > 0) {
       // This one is actually pretty safe. TS will tell us if what's inside has
       // a call signature, making it a function.
-      baseType = 'Function'
-
-    } else if (actualType.startsWith('Array<') || actualType.endsWith('[]')) {
-
+      baseType = "Function";
+    } else if (actualType.startsWith("Array<") || actualType.endsWith("[]")) {
       // This is some nonsense calculation but, it's quite effective? Arrays
       // are easy to spot syntactically. This doesn't work for user-defined
       // array types though. Fortunately, those are exceedingly rare.
-      baseType = 'Array'
-
+      baseType = "Array";
     } else {
-      baseType = 'Object'
+      baseType = "Object";
     }
 
-    writer.write(`${baseType} as PropType<${actualType}>`)
+    writer.write(`${baseType} as PropType<${actualType}>`);
 
     // Add PropType to the imports afterwards, since we just used it.
-    callbacks.push(source => {
-      imports.ensure(source, 'vue', {
-        named: ['PropType'],
-      })
-    })
+    callbacks.push((source) => {
+      imports.ensure(source, "vue", {
+        named: ["PropType"],
+      });
+    });
   }
 
-  writer
-    .write(',')
-    .newLine()
+  writer.write(",").newLine();
 
-  return callbacks
+  return callbacks;
 }
 
 function writePropOptions(
   writer: ts.CodeBlockWriter,
   options: {
-    required?: ts.PropertyAssignment
-    default?: ts.PropertyAssignment
+    required?: ts.PropertyAssignment;
+    default?: ts.PropertyAssignment;
   }
 ) {
-    
   // Only permit exactly one of `default` and `required`,
   // since a default value implies required is false in Vue.
   // There actually doesn't seem to be a use-case to set both!
   if (options.default) {
-    writer.write(options.default.getText())
-
+    writer.write(options.default.getText());
   } else if (options.required) {
-    writer.write(options.required.getText())
-
+    writer.write(options.required.getText());
   } else {
-
     // Lastly, if neither property is directly supplied, mark `required` false.
-    writer.write('required: false')
+    writer.write("required: false");
   }
 
-  writer
-    .write(',')
-    .newLine()
+  writer.write(",").newLine();
 }
 
-function writeData(
-  writer: ts.CodeBlockWriter,
-  data: ts.PropertyDeclaration[]
-) {
+function writeData(writer: ts.CodeBlockWriter, data: ts.PropertyDeclaration[]) {
   if (data.length > 0) {
     writer
-      .writeLine('data()')
+      .writeLine("data()")
       .space()
-      .write('{')
+      .write("{")
       .newLine()
       .withIndentationLevel(1, () => {
-        writer.writeLine('return {')
+        writer.writeLine("return {");
 
         for (const property of data) {
-          writeDataProperty(writer, property)
+          writeDataProperty(writer, property);
         }
 
-        writer.writeLine('};')
+        writer.writeLine("};");
       })
-      .writeLine('},')
+      .writeLine("},");
   }
 }
 
-function writeDataProperty(
-  writer: ts.CodeBlockWriter,
-  property: ts.PropertyDeclaration,
-) {
-  writeDocs(writer, property.getJsDocs())
-  writer
-    .write(property.getName())
-    .write(':')
-    .space()
-    .write(property.getInitializerOrThrow().getText())
+function writeDataProperty(writer: ts.CodeBlockWriter, property: ts.PropertyDeclaration) {
+  writeDocs(writer, property.getJsDocs());
+  writer.write(property.getName()).write(":").space().write(property.getInitializerOrThrow().getText());
 
-  const type = property.getTypeNode()
+  const type = property.getTypeNode();
 
   if (type) {
-    writer
-      .space()
-      .write('as')
-      .space()
-      .write(type.getText())
+    writer.space().write("as").space().write(type.getText());
   }
-          
-  writer
-    .write(',')
-    .newLine()
+
+  writer.write(",").newLine();
 }
 
 function writeComputed(
   writer: ts.CodeBlockWriter,
-  computed: Record<string, {
-    getter?: ts.GetAccessorDeclaration
-    setter?: ts.SetAccessorDeclaration
-  }>
+  computed: Record<
+    string,
+    {
+      getter?: ts.GetAccessorDeclaration;
+      setter?: ts.SetAccessorDeclaration;
+    }
+  >
 ) {
   if (Object.keys(computed).length > 0) {
-    writer
-      .write('computed:')
-      .space()
-      .write('{')
-      .newLine()
-  
+    writer.write("computed:").space().write("{").newLine();
+
     for (const [name, { getter, setter }] of Object.entries(computed)) {
       if (getter) {
         if (!setter) {
-          writeComputedGetter(writer, getter)
-
+          writeComputedGetter(writer, getter);
         } else {
-          writeComputedProperty(writer, name, getter, setter)
+          writeComputedProperty(writer, name, getter, setter);
         }
       }
     }
-      
-    writer.writeLine('},')
+
+    writer.writeLine("},");
   }
 }
 
@@ -293,223 +238,179 @@ function writeComputedProperty(
 ) {
   writer
     .write(name)
-    .write(':')
+    .write(":")
     .space()
-    .write('{')
+    .write("{")
     .newLine()
     .withIndentationLevel(1, () => {
-      const setParameter = setter.getParameters()[0]
+      const setParameter = setter.getParameters()[0];
 
       if (!setParameter) {
-        throw new Error('Computed setter doesn\'t seem to have a parameter.')
+        throw new Error("Computed setter doesn't seem to have a parameter.");
       }
 
-      writeDocs(writer, getter.getJsDocs())
+      writeDocs(writer, getter.getJsDocs());
       writer
         .write(`get()`)
-        .write(':')
+        .write(":")
         .space()
         // Computed property getters need to match the setter's return type,
         // But there's actually a variety of places this can be obtained...
         // try them all before giving up with `any`.
-        .write(getter.getReturnTypeNode()?.getText() 
-            || setParameter.getTypeNode()?.getText() 
-            || 'any')
+        .write(getter.getReturnTypeNode()?.getText() || setParameter.getTypeNode()?.getText() || "any")
         .newLine()
         .write(getter.getBodyOrThrow().getText())
-        .write(',')
-        .newLine()
+        .write(",")
+        .newLine();
 
-      writeDocs(writer, setter.getJsDocs())
-      writer
-        .write('set(')
-        .write(setParameter.getText())
-        .write(')')
-        .newLine()
-        .write(setter.getBodyOrThrow().getText())
-        .write(',')
-        .newLine()
+      writeDocs(writer, setter.getJsDocs());
+      writer.write("set(").write(setParameter.getText()).write(")").newLine().write(setter.getBodyOrThrow().getText()).write(",").newLine();
     })
-    .writeLine('},')
-  }
+    .writeLine("},");
+}
 
-function writeComputedGetter(
-  writer: ts.CodeBlockWriter,
-  getter: ts.GetAccessorDeclaration
-) {
-  writeDocs(writer, getter.getJsDocs())
+function writeComputedGetter(writer: ts.CodeBlockWriter, getter: ts.GetAccessorDeclaration) {
+  writeDocs(writer, getter.getJsDocs());
   writer
     .write(`${getter.getName()}():`)
     .space()
-    .write(getter.getReturnTypeNode()?.getText() || 'any')
+    .write(getter.getReturnTypeNode()?.getText() || "any")
     .newLine()
     .write(getter.getBodyOrThrow().getText())
-    .write(',')
-    .newLine()
+    .write(",")
+    .newLine();
 }
 
-function writeMethods(
-  writer: ts.CodeBlockWriter,
-  methods: ts.MethodDeclaration[]
-) {
-  const lifecycleMethods: ts.MethodDeclaration[] = []
-  const normalMethods: ts.MethodDeclaration[] = []
+function writeMethods(writer: ts.CodeBlockWriter, methods: ts.MethodDeclaration[]) {
+  const lifecycleMethods: ts.MethodDeclaration[] = [];
+  const normalMethods: ts.MethodDeclaration[] = [];
 
   for (const method of methods) {
     if (LIFECYCLE_HOOKS.includes(method.getName())) {
-      lifecycleMethods.push(method)
-
+      lifecycleMethods.push(method);
     } else {
-      normalMethods.push(method)
+      normalMethods.push(method);
     }
   }
 
   for (const method of lifecycleMethods) {
-    writeMethod(writer, method)
+    writeMethod(writer, method);
   }
 
   if (normalMethods.length > 0) {
     writer
-      .write('methods:')
+      .write("methods:")
       .space()
-      .write('{')
+      .write("{")
       .newLine()
       .withIndentationLevel(1, () => {
         for (const method of normalMethods) {
-          writeMethod(writer, method)
+          writeMethod(writer, method);
         }
       })
-      .writeLine('},')
+      .writeLine("},");
   }
 }
 
-function writeMethod(
-  writer: ts.CodeBlockWriter,
-  method: ts.MethodDeclaration
-) {
-  writeDocs(writer, method.getJsDocs())
-  writer
-    .write(method.getText())
-    .write(',')
-    .newLine()
+function writeMethod(writer: ts.CodeBlockWriter, method: ts.MethodDeclaration) {
+  writeDocs(writer, method.getJsDocs());
+  writer.write(method.getText()).write(",").newLine();
 }
 
 function writeWatches(
   writer: ts.CodeBlockWriter,
   watches: {
-    path: string,
-    method: string,
-    immediate?: string
-    deep?: string
+    path: string;
+    method: string;
+    immediate?: string;
+    deep?: string;
   }[]
 ) {
   if (watches.length > 0) {
     writer
-      .write('watch:')
+      .write("watch:")
       .space()
-      .write('{')
+      .write("{")
       .newLine()
       .withIndentationLevel(1, () => {
         for (const watch of watches) {
-          writeWatch(writer, watch)
+          writeWatch(writer, watch);
         }
       })
-      .writeLine('},')
+      .writeLine("},");
   }
 }
 
 function writeWatch(
   writer: ts.CodeBlockWriter,
   watch: {
-    path: string,
-    method: string,
-    immediate?: string,
-    deep?: string,
+    path: string;
+    method: string;
+    immediate?: string;
+    deep?: string;
   }
 ) {
   writer
     .quote()
     .write(watch.path)
     .quote()
-    .write(':')
+    .write(":")
     .space()
-    .write('{')
+    .write("{")
     .newLine()
     .withIndentationLevel(1, () => {
-      writer
-        .write('// @ts-ignore')
-        .newLine()
-        .write('handler:')
-        .space()
-        .write(`'${watch.method}'`)
-        .write(',')
-        .newLine()
-        
+      writer.write("// @ts-ignore").newLine().write("handler:").space().write(`'${watch.method}'`).write(",").newLine();
+
       if (watch.immediate) {
-        writer
-          .write(watch.immediate)
-          .write(',')
-          .newLine()
+        writer.write(watch.immediate).write(",").newLine();
       }
 
       if (watch.deep) {
-        writer
-          .write(watch.deep)
-          .write(',')
-          .newLine()
+        writer.write(watch.deep).write(",").newLine();
       }
     })
-    .writeLine('},')
+    .writeLine("},");
 }
 
 export function classToObject(source: ts.SourceFile) {
-  const vue = vue_class.extract(source)
+  const vue = vue_class.extract(source);
 
   if (!vue) {
-    return
+    return;
   }
 
-  const {
-    declaration,
-    decorator,
-    props,
-    data,
-    computed,
-    methods,
-    syncProps,
-    watches,
-  } = vue
+  let { declaration, decorator, props, data, computed, methods, syncProps, watches } = vue;
 
-  const callbacks: PostprocessCallback[] = [
-    source => source.formatText()
-  ]
+  declaration = vue_class.removeAccessModifiers(declaration);
+
+  const callbacks: PostprocessCallback[] = [(source) => source.formatText()];
 
   source.addExportAssignment({
-    leadingTrivia: writer => {
-      writeDocs(writer, declaration.getJsDocs())
+    leadingTrivia: (writer) => {
+      writeDocs(writer, declaration.getJsDocs());
     },
-    expression: writer => {
+    expression: (writer) => {
       writer
-        .writeLine('Vue.extend({')
+        .writeLine("defineComponent({")
         .withIndentationLevel(1, () => {
-          writeName(writer, declaration)
-          writeConfig(writer, decorator)
-          callbacks.push(...writeProps(writer, props))
-          writeData(writer, data)
-          writeComputed(writer, computed)
-          writeWatches(writer, watches)
-          writeMethods(writer, methods)
+          writeName(writer, declaration);
+          writeConfig(writer, decorator);
+          callbacks.push(...writeProps(writer, props));
+          writeData(writer, data);
+          writeComputed(writer, computed);
+          writeWatches(writer, watches);
+          writeMethods(writer, methods);
         })
-        .write('})')
+        .write("})");
     },
     isExportEquals: false,
-  })
+  });
 
   // Perform any processing that had to happen after we finished writing.
   for (const callback of callbacks.reverse()) {
-    callback(source)
+    callback(source);
   }
 
   // Remove the class now that we're done reading everything.
-  vue.declaration.remove()
+  vue.declaration.remove();
 }
